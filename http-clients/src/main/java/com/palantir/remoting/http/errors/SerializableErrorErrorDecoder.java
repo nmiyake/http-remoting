@@ -28,6 +28,8 @@ import java.io.Reader;
 import java.lang.reflect.InvocationTargetException;
 import java.util.Collection;
 import java.util.List;
+import javax.annotation.CheckForNull;
+import javax.ws.rs.WebApplicationException;
 import javax.ws.rs.core.MediaType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -69,7 +71,8 @@ public enum SerializableErrorErrorDecoder implements ErrorDecoder {
                 }
 
                 // Construct remote exception and fill with remote stacktrace
-                Exception remoteException = constructException(error.getExceptionClass(), error.getMessage());
+                Exception remoteException = constructException(error.getExceptionClassName(), error.getMessage(),
+                        response.status(), null);
                 List<StackTraceElement> stackTrace = error.getStackTrace();
                 if (stackTrace != null) {
                     remoteException.setStackTrace(stackTrace.toArray(new StackTraceElement[stackTrace.size()]));
@@ -78,7 +81,8 @@ public enum SerializableErrorErrorDecoder implements ErrorDecoder {
                 // Construct local exception that wraps the remote exception and fill with stack trace of local
                 // call (yet without the reflection overhead).
                 Exception localException =
-                        constructException(error.getExceptionClass(), error.getMessage(), remoteException);
+                        constructException(error.getExceptionClassName(), error.getMessage(), response.status(),
+                                remoteException);
                 localException.fillInStackTrace();
 
                 return localException;
@@ -101,32 +105,57 @@ public enum SerializableErrorErrorDecoder implements ErrorDecoder {
         }
     }
 
-    private static Exception constructException(Class<? extends Exception> exceptionClass, String message) {
+    // wrappedException may be null to indicate an unknown cause
+    @SuppressWarnings("unchecked")
+    private static Exception constructException(String exceptionClassName, String message, int status,
+            @CheckForNull Throwable wrappedException) {
+        Class<? extends Exception> exceptionClass;
         try {
-            return exceptionClass.getConstructor(String.class).newInstance(message);
-        } catch (Exception e1) {
-            return new RuntimeException(String.format(
-                    "Failed to construction exception of type %s, constructing RuntimeException instead: %s%n%s",
-                    exceptionClass.toString(), e1.toString(), message));
+            exceptionClass = (Class<? extends Exception>) Class.forName(exceptionClassName);
+        } catch (ClassNotFoundException e) {
+            // use the most expressive constructor that exists in Jersey 1.x
+            return new WebApplicationException(wrappedException, status);
         }
-    }
 
-    private static Exception constructException(
-            Class<? extends Exception> exceptionClass, String message, Throwable wrappedException) {
-        // Note: If another constructor is added, then we should refactor the construction logic in order to avoid
-        // nested try/catch
-        try {
-            return exceptionClass.getConstructor(String.class, Throwable.class).newInstance(message, wrappedException);
-        } catch (NoSuchMethodException | InstantiationException
-                | IllegalAccessException | InvocationTargetException e) {
-            try {
-                return exceptionClass.getConstructor(String.class).newInstance(message);
-            } catch (Exception e1) {
-                return new RuntimeException(String.format(
-                        "Failed to wrap exception as %s, wrapping exception as RuntimeException instead: %s%n%s",
-                        exceptionClass.toString(), e1.toString(), message),
-                        wrappedException);
-            }
+        switch (exceptionClassName) {
+            case "javax.ws.rs.ClientErrorException":
+            case "javax.ws.rs.ServerErrorException":
+                try {
+                    return exceptionClass.getConstructor(String.class, int.class, Throwable.class)
+                            .newInstance(message, status, wrappedException);
+                } catch (InstantiationException | IllegalAccessException | IllegalArgumentException
+                        | InvocationTargetException | NoSuchMethodException | SecurityException e) {
+                    // use the most expressive constructor that exists in Jersey 1.x
+                    return new WebApplicationException(wrappedException, status);
+                }
+
+            case "javax.ws.rs.WebApplicationException":
+                try {
+                    return exceptionClass.getConstructor(String.class, Throwable.class, int.class)
+                            .newInstance(message, wrappedException, status);
+                } catch (InstantiationException | IllegalAccessException | IllegalArgumentException
+                        | InvocationTargetException | NoSuchMethodException | SecurityException e) {
+                    // use the most expressive constructor that exists in Jersey 1.x
+                    return new WebApplicationException(wrappedException, status);
+                }
+
+            default:
+                // Note: If another constructor is added, then we should refactor the construction logic in order to
+                // avoid nested try/catch
+                try {
+                    return exceptionClass.getConstructor(String.class, Throwable.class)
+                            .newInstance(message, wrappedException);
+                } catch (NoSuchMethodException | InstantiationException
+                        | IllegalAccessException | InvocationTargetException e) {
+                    try {
+                        return exceptionClass.getConstructor(String.class).newInstance(message);
+                    } catch (Exception e1) {
+                        return new RuntimeException(String.format(
+                                "Failed to construct exception as %s, constructing RuntimeException instead: %s%n%s",
+                                exceptionClass.toString(), e1.toString(), message),
+                                wrappedException);
+                    }
+                }
         }
     }
 

@@ -4,19 +4,18 @@
 
 package feign;
 
-import com.google.common.base.Charsets;
 import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableMap;
-import com.palantir.remoting.http.server.ForbiddenExceptionMapper;
 import com.palantir.remoting.http.server.NoContentExceptionMapper;
-import com.palantir.remoting.http.server.NotFoundExceptionMapper;
 import com.palantir.remoting.http.server.OptionalAsNoContentMessageBodyWriter;
+import com.palantir.remoting.http.server.WebApplicationExceptionMapper;
 import io.dropwizard.Application;
 import io.dropwizard.Configuration;
 import io.dropwizard.setup.Environment;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import javax.annotation.Nullable;
 import javax.ws.rs.Consumes;
 import javax.ws.rs.ForbiddenException;
@@ -38,8 +37,7 @@ public class TestServer extends Application<Configuration> {
 
         // Not registering all mappers so that we can test behaviour for exceptions without registered mapper.
         env.jersey().register(new NoContentExceptionMapper());
-        env.jersey().register(new ForbiddenExceptionMapper(true));
-        env.jersey().register(new NotFoundExceptionMapper(true));
+        env.jersey().register(new WebApplicationExceptionMapper(true));
     }
 
     static class TestResource implements TestService {
@@ -113,13 +111,13 @@ public class TestServer extends Application<Configuration> {
 
         @Override
         public InputStream writeInputStream(String bytes) {
-            return new ByteArrayInputStream(bytes.getBytes(Charsets.UTF_8));
+            return new ByteArrayInputStream(bytes.getBytes(StandardCharsets.UTF_8));
         }
 
         @Override
         public String readInputStream(InputStream data) {
             try {
-                return new String(Util.toByteArray(data), Charsets.UTF_8);
+                return new String(Util.toByteArray(data), StandardCharsets.UTF_8);
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
